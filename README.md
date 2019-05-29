@@ -115,12 +115,12 @@ reattempting request with supported_fields
     ],
     "result": {
         "account_currency": "USD",
-        "account_name": "New Sandbox Ad Account",
+        "account_name": __REDACTED__,
         "reach": "0",
         "social_spend": "20",
         "objective": "LINK_CLICKS",
         "buying_type": "AUCTION",
-        "campaign_name": "Test Campaign",
+        "campaign_name": __REDACTED__,
         "cpm": "100",
         "cpc": "1",
         "date_start": "2019-04-29",
@@ -129,9 +129,9 @@ reattempting request with supported_fields
         "impressions": "200",
         "clicks": "20",
         "frequency": "0",
-        "campaign_id": "120330000072875206",
+        "campaign_id": __REDACTED__,
         "unique_clicks": "0",
-        "account_id": "1102091649984036",
+        "account_id": __REDACTED__,
         "ctr": "10"
     }
 }
