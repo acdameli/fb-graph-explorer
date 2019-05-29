@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
-from json import loads
+from json import loads, dumps
 from os import environ
+from sys import stderr
 
 import click
-from facebook import GraphAPI
+from facebook import GraphAPI, GraphAPIError
 
 try:
     ACCESS_TOKEN = environ['FB_ACCESS_TOKEN']
@@ -11,21 +12,26 @@ except KeyError as e:
     ACCESS_TOKEN = None
 
 
-def process_request(fb, url, post_filter, fields, output):
+def process_request(ctx, url, post_filter, fields, output):
     """
     makes a call to url using fb client, trims the response down based on
     post_filter, and calls process_fields using the result and the rest of
     the params
-    :param fb:
-    :param url:
-    :param post_filter:
-    :param fields:
-    :param output:
-    :return:
     """
-    data = fb.get_object(url)
+    if ctx.obj['verbose']:
+        print(url)
+
+    data = ctx.obj['fb'].get_object(url)
+
+    if ctx.obj['verbose']:
+        print(data)
+
     for field in post_filter:
         data = data[field]
+
+    if ctx.obj['verbose']:
+        print(data)
+
     return process_fields(data, fields, output)
 
 
@@ -56,77 +62,141 @@ def process_fields(data, fields, output):
             final[key] = value
         if len(final) == 1:
             final = next(iter(final.values()))
+    if len(final) == 1 and isinstance(final, list):
+        final = final[0]
     if output:
-        print(final)
+        print(dumps(final))
     return final
 
 
 @click.group()
 @click.option('--access-token', default=ACCESS_TOKEN,
               help='Your access token for the FB GraphApi')
+@click.option('--output/--no-output', default=True)
+@click.option('-v', '--verbose', default=False, is_flag=True)
 @click.pass_context
-def cli(ctx, access_token):
+def cli(ctx, access_token, output, verbose):
     ctx.ensure_object(dict)
     ctx.obj['fb'] = GraphAPI(access_token, version=3.2)
+    ctx.obj['output'] = output
+    ctx.obj['verbose'] = verbose
+    ctx.obj['attempts'] = 0
 
 
-@cli.command()
-@click.pass_context
-def get_ad_account(ctx, fields, output=True):
-    return process_request(ctx.obj['fb'], 'me/?fields=adaccounts',
-                           ['adaccounts', 'data'], fields, output)
+class ContextManager(object):
+    def __init__(self, context):
+        self.context = context
+        self.initial_output = self.context.obj['output']
+
+    def __enter__(self):
+        self.context.obj['output'] = False
+        return self.context
+
+    def __exit__(self, type, value, traceback):
+        self.context.obj['output'] = self.initial_output
 
 
 @cli.command()
 @click.option('--fields')
 @click.pass_context
-def get_campaigns(ctx, fields, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
-    return process_request(ctx.obj['fb'], f'{account_id}/campaigns', ['data'],
-                           fields, output)
+def get_ad_account(ctx, fields):
+    return process_request(ctx, 'me/?fields=adaccounts',
+                           ['adaccounts', 'data'], fields, ctx.obj['output'])
 
 
 @cli.command()
 @click.option('--fields')
 @click.pass_context
-def get_adsets(ctx, fields, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
+def get_ad_account_insights(ctx, fields):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
+    query_fields = [
+        'account_id', 'account_name', 'account_currency', 'clicks', 'cpc',
+        'cpm', 'ctr', 'frequency', 'impressions', 'reach', 'social_spend',
+        'spend', 'unique_clicks',
+    ]
     return process_request(
-        ctx.obj['fb'],
+        ctx,
+        f'{account_id}/insights?fields=' + ','.join(query_fields),
+        ['data'], fields, ctx.obj['output']
+    )
+
+
+@cli.command()
+@click.option('--campaign-id')
+@click.option('--fields')
+@click.pass_context
+def get_campaign_insights(ctx, campaign_id, fields):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
+        if not campaign_id:
+            campaigns = c.invoke(get_campaigns, account_id=account_id)
+            if not isinstance(campaigns, list):
+                campaigns = [campaigns]
+            campaign_id = select_option(campaigns, 'name', 'Select a campaign',
+                                        'campaign')['id']
+    return process_request(ctx, f'{campaign_id}/insights',
+                           ['data'],
+                           fields, ctx.obj['output'])
+
+
+@cli.command()
+@click.option('--fields')
+@click.pass_context
+def get_campaigns(ctx, fields, account_id=None):
+    if not account_id:
+        with ContextManager(ctx) as c:
+            account_id = c.invoke(get_ad_account, fields='0.id')
+    return process_request(ctx, f'{account_id}/campaigns?fields=id,name',
+                           ['data'],
+                           fields, ctx.obj['output'])
+
+
+@cli.command()
+@click.option('--fields')
+@click.pass_context
+def get_adsets(ctx, fields):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
+    return process_request(
+        ctx,
         f'{account_id}/adsets?fields=id,name',
         ['data'],
         fields,
-        output
+        ctx.obj['output']
     )
 
 
 @cli.command()
 @click.option('--fields')
 @click.pass_context
-def get_adimages(ctx, fields, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
-    return process_request(ctx.obj['fb'],
+def get_adimages(ctx, fields):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
+    return process_request(ctx,
                            f'{account_id}/adimages?fields=hash,id,url',
-                           ['data'], fields, output)
+                           ['data'], fields, ctx.obj['output'])
 
 
 @cli.command()
 @click.option('--fields')
 @click.pass_context
-def get_ads(ctx, fields, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
-    return process_request(ctx.obj['fb'], f'{account_id}/ads', ['data'], fields,
-                           output)
+def get_ads(ctx, fields):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
+    return process_request(ctx, f'{account_id}/ads', ['data'], fields,
+                           ctx.obj['output'])
 
 
 @cli.command()
 @click.option('--fields')
 @click.pass_context
-def get_adcreatives(ctx, fields, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
-    return process_request(ctx.obj['fb'],
+def get_adcreatives(ctx, fields):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
+    return process_request(ctx,
                            f'{account_id}/adcreatives',
-                           ['data'], fields, output)
+                           ['data'], fields, ctx.obj['output'])
 
 
 def create_object(fb, url, definition, output, files=None):
@@ -141,8 +211,9 @@ def create_object(fb, url, definition, output, files=None):
 @click.option('--definition', default={},
               help='json string representing the campaign')
 @click.pass_context
-def create_campaign(ctx, definition, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
+def create_campaign(ctx, definition):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
     definition = loads(definition)
     default = {
         "objective": "LINK_CLICKS",
@@ -153,15 +224,16 @@ def create_campaign(ctx, definition, output=True):
         if field not in definition:
             raise Exception(f'You must provide a {field} for your adset')
     return create_object(ctx.obj['fb'], f'{account_id}/campaigns',
-                         definition, output)
+                         definition, ctx.obj['output'])
 
 
 @cli.command()
 @click.option('--definition', default={},
               help='json string representing the adset')
 @click.pass_context
-def create_adset(ctx, definition, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
+def create_adset(ctx, definition):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
     definition = loads(definition)
     default = {
         "billing_event": "IMPRESSIONS",
@@ -182,20 +254,21 @@ def create_adset(ctx, definition, output=True):
         if field not in definition:
             raise Exception(f'You must provide a {field} for your adset')
     return create_object(ctx.obj['fb'], f'{account_id}/adsets',
-                         definition, output)
+                         definition, ctx.obj['output'])
 
 
 @cli.command()
 @click.option('--image', help='path to your image')
 @click.pass_context
-def create_adimage(ctx, image, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
+def create_adimage(ctx, image):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
     with open(image, 'rb') as f:
         return create_object(
             ctx.obj['fb'],
             f'{account_id}/adimages',
             None,
-            output,
+            ctx.obj['output'],
             files={'filename': f}
         )
 
@@ -208,8 +281,9 @@ def create_adimage(ctx, image, output=True):
 @click.option('--image-message')
 @click.pass_context
 def create_adcreative(ctx, page_id, name, image_hash, image_url,
-                      image_message, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
+                      image_message):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
     try:
         if not image_hash or not image_url:
             image = select_image(ctx)
@@ -233,7 +307,7 @@ def create_adcreative(ctx, page_id, name, image_hash, image_url,
                     'page_id': page_id
                 }
             },
-            output
+            ctx.obj['output']
         )
     except Exception as e:
         print(e)
@@ -245,8 +319,9 @@ def create_adcreative(ctx, page_id, name, image_hash, image_url,
 @click.option('--adset_id')
 @click.option('--name')
 @click.pass_context
-def create_ad(ctx, status, creative_id, adset_id, name, output=True):
-    account_id = ctx.invoke(get_ad_account, fields='0.id', output=False)
+def create_ad(ctx, status, creative_id, adset_id, name):
+    with ContextManager(ctx) as c:
+        account_id = c.invoke(get_ad_account, fields='0.id')
     status = status or 'ACTIVE'
     try:
         adset_id = adset_id or select_adset(ctx)
@@ -258,7 +333,7 @@ def create_ad(ctx, status, creative_id, adset_id, name, output=True):
             'status': status,
             'creative': creative,
             'adset_id': adset_id
-        }, output)
+        }, ctx.obj['output'])
     except Exception as e:
         print(e)
 
@@ -303,6 +378,82 @@ def select_page():
                         'available given an ad Account Owner\'s access token '
                         'sooooo, look up a fb page id like a suckah and type '
                         'it in here... suckah!')
+
+
+@cli.command()
+@click.option('--fields')
+@click.option('--url')
+@click.option('--filter')
+@click.option('--object-ids', default={})
+@click.pass_context
+def call_gql(ctx, fields, url, object_ids, filter, output=True):
+    """
+    example: python main.py call-gql --url='{campaign_id}/insights' \
+      --fields="..." --filter='["data"]'
+      fields can be a gigantic comma separated string listing of all the fields
+      that could possibly exist
+      --filter just simplifies the output
+      acceptable fstrings in url are: {'campaign_id', 'account_id', 'adset_id',
+      'ad_id'} which will use the specific subcommand to pull the first id
+      for that object type and perform a replacement.
+
+    output:
+    {
+        "unsupported_fields": [/* fields which gave back an error */],
+        "unfound_fields": [/* fields weren't returned, no error caused */],
+        "found_fields": [/* fields you should see in result*/]
+        "result": {/* the fields and values found in the response */}
+    }
+
+    """
+    if ctx.obj['attempts'] > 3:
+        raise Exception('Too many attempts, aborting')
+
+    lookups = {
+        'campaign_id': get_campaigns,
+        'account_id': get_ad_account,
+        'adset_id': get_adsets,
+        'ad_id': get_ads,
+    }
+    for id_type, call in lookups.items():
+        with ContextManager(ctx) as c:
+            if '{' + id_type + '}' in url and id_type not in object_ids:
+                object_ids[id_type] = c.invoke(call, fields='0.id')
+    url = url.format(**object_ids)
+    join = '&' if '?' in url else '?'
+    printable = {'unsupported_fields': []}
+    try:
+        result = process_request(ctx, f'{url}{join}fields={fields}',
+                                 loads(filter) or [], [],
+                                 output=False)
+    except GraphAPIError as e:
+        err = e.result['error']
+        if err['code'] == 100 and 'error_subcode' not in err:
+            msg = err['message']
+            msg = msg[7:msg.find(' are not valid for fields param.')]
+            unsupported_fields = set(msg.split(', '))
+            supported_fields = set(fields.split(','))\
+                .difference(unsupported_fields)
+            printable['unsupported_fields'] = list(unsupported_fields)
+            print('reattempting request with supported_fields', file=stderr)
+            ctx.obj['attempts'] += 1
+            result = ctx.invoke(call_gql, fields=','.join(supported_fields),
+                                url=url, object_ids=object_ids,
+                                filter=filter, output=False)
+        else:
+            raise
+
+    if isinstance(result, dict):
+        found_fields = set(result.keys())
+        fields_set = set(fields.split(','))
+        unfound_fields = fields_set.difference(found_fields)
+        if output:
+            printable['unfound_fields'] = list(unfound_fields)
+            printable['found_fields'] = list(found_fields)
+    printable['result'] = result
+    if output:
+        print(dumps(printable))
+    return result
 
 
 if __name__ == '__main__':
