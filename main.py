@@ -441,7 +441,7 @@ def call_gql(ctx, fields, url, object_ids, filter, output=True):
             unsupported_fields = set(msg.split(', '))
             supported_fields = set(fields.split(','))\
                 .difference(unsupported_fields)
-            printable['unsupported_fields'] = list(unsupported_fields)
+            printable['unsupported_fields'] = sorted(list(unsupported_fields))
             print('reattempting request with supported_fields', file=stderr)
             ctx.obj['attempts'] += 1
             result = ctx.invoke(call_gql, fields=','.join(supported_fields),
@@ -451,12 +451,11 @@ def call_gql(ctx, fields, url, object_ids, filter, output=True):
             raise
 
     if isinstance(result, dict):
-        found_fields = set(result.keys())
+        found_set = set(result.keys())
         fields_set = set(fields.split(','))
-        unfound_fields = fields_set.difference(found_fields)
-        if output:
-            printable['unfound_fields'] = list(unfound_fields)
-            printable['found_fields'] = list(found_fields)
+        unfound_set = fields_set.difference(found_set)
+        unfound = sorted(list(unfound_set))
+        printable['unfound_fields'] = unfound
     printable['result'] = result
     printable['url'] = url
     printable['object_ids'] = object_ids
