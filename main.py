@@ -414,11 +414,18 @@ def call_gql(ctx, fields, url, object_ids, filter, output=True):
         'account_id': get_ad_account,
         'adset_id': get_adsets,
         'ad_id': get_ads,
+        'adcreative_id': get_adcreatives,
     }
     for id_type, call in lookups.items():
         with ContextManager(ctx) as c:
             if '{' + id_type + '}' in url and id_type not in object_ids:
-                object_ids[id_type] = c.invoke(call, fields='0.id')
+                r = c.invoke(call)
+                if 'id' in r:
+                    object_ids[id_type] = r['id']
+                elif isinstance(r, list) and r:
+                    object_ids[id_type] = r[0]['id']
+                else:
+                    raise Exception(f'Could not replace {id_type} by lookup')
     url = url.format(**object_ids)
     join = '&' if '?' in url else '?'
     printable = {'unsupported_fields': []}
@@ -451,8 +458,12 @@ def call_gql(ctx, fields, url, object_ids, filter, output=True):
             printable['unfound_fields'] = list(unfound_fields)
             printable['found_fields'] = list(found_fields)
     printable['result'] = result
+    printable['url'] = url
+    printable['object_ids'] = object_ids
     if output:
-        print(dumps(printable))
+        print(
+            dumps(printable, sort_keys=True, indent=4, separators=(',', ': '))
+        )
     return result
 
 
