@@ -430,9 +430,10 @@ def call_gql(ctx, fields, url, object_ids, filter, output=True):
     join = '&' if '?' in url else '?'
     printable = {'unsupported_fields': []}
     try:
+        if filter and not isinstance(filter, list):
+            filter = loads(filter) if isinstance(filter, str) else []
         result = process_request(ctx, f'{url}{join}fields={fields}',
-                                 loads(filter) or [], [],
-                                 output=False)
+                                 filter, [], output=False)
     except GraphAPIError as e:
         err = e.result['error']
         if err['code'] == 100 and 'error_subcode' not in err:
