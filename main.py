@@ -467,5 +467,43 @@ def call_gql(ctx, fields, url, object_ids, filter, output=True):
     return result
 
 
+def parse_fields_string(fields):
+    """
+    accepts an arbitrary fields string as per fb graphql standard eg:
+    myField1,myField2,myRelatedObject1{relObjField1,otherRelatedObject{
+    oroField1}}
+    :param fields: string
+    :return: a list of 2-tuples, [0] => symbol found, [1] => sub-context if
+    appropriate
+    """
+    current_context = []
+    context_stack = []
+    symbol_stack = []
+    current_symbol = ''
+    for c in fields:
+        if c == ',' and current_symbol:
+            current_context.append((current_symbol, []))
+            current_symbol = ''
+        elif c == '{':
+            context_stack.append(current_context)
+            symbol_stack.append(current_symbol)
+            current_context = []
+            current_symbol = ''
+        elif c == '}':
+            if current_symbol:
+                current_context.append((current_symbol,))
+            temp_context = current_context
+            current_context = context_stack.pop()
+            current_context.append((symbol_stack.pop(), temp_context))
+            current_symbol = ''
+        else:
+            current_symbol += c
+
+    if current_symbol:
+        current_context.append((current_symbol,))
+
+    return current_context
+
+
 if __name__ == '__main__':
     cli()
